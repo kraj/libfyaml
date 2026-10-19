@@ -1480,12 +1480,13 @@ struct fy_scalar_content_iter {
 	const char *s;
 	const char *e;
 	int eofc;
+	unsigned int utf8_errs;
 };
 
 static int fy_scalar_content_iter_read_block(void *user, int *buf, int count)
 {
 	struct fy_scalar_content_iter *iter = user;
-	int c, rdn, w;
+	int c, rdn, w, err;
 	const char *s, *e;
 
 	assert(count > 0);
@@ -1498,11 +1499,12 @@ static int fy_scalar_content_iter_read_block(void *user, int *buf, int count)
 	s = iter->s;
 	e = iter->e;
 	while (rdn < count) {
-		c = fy_utf8_get(s, e - s, &w);
+		c = fy_utf8_get_bytes(s, e - s, &w, &err);
 		if (c < 0) {
 			iter->eofc = c;
 			break;
 		}
+		fy_utf8_err_add(&iter->utf8_errs, err);
 		buf[rdn++] = c;
 		s += w;
 	}
@@ -1525,6 +1527,7 @@ void fy_analyze_scalar_content(const char *data, size_t size,
 	iter.s = data;
 	iter.e = data + size;
 	iter.eofc = 0;
+	iter.utf8_errs = 0;
 
 	fy_utf8_buf_reset(&ubuf,
 			fy_scalar_content_iter_read_block,
@@ -1553,6 +1556,7 @@ void fy_analyze_scalar_content(const char *data, size_t size,
 	}
 
 	fy_atom_text_analyze_internal(&ubuf, style, lb_mode, analysis);
+	fy_text_analysis_add_utf8_errs(analysis, iter.utf8_errs);
 }
 
 char *fy_token_debug_text(struct fy_token *fyt)

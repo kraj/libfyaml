@@ -1567,11 +1567,15 @@ int fy_atom_iter_peekc(struct fy_atom_iter *iter)
 	return fy_atom_iter_ungetc(iter, c);
 }
 
-int fy_atom_iter_utf8_get(struct fy_atom_iter *iter)
+/* errp NULL: strict, a bad byte is an error; else see fy_utf8_get_bytes() */
+static int fy_atom_iter_utf8_get_internal(struct fy_atom_iter *iter, int *errp)
 {
 	size_t avail;
 	ssize_t nread;
 	int c, w;
+
+	if (errp)
+		*errp = 0;
 
 	if (!iter)
 		return -1;
@@ -1602,12 +1606,25 @@ int fy_atom_iter_utf8_get(struct fy_atom_iter *iter)
 			return FYUG_EOF;
 	}
 
-	c = fy_utf8_get(iter->cache_buf + iter->cache_pos, avail, &w);
+	if (errp)
+		c = fy_utf8_get_bytes(iter->cache_buf + iter->cache_pos, avail, &w, errp);
+	else
+		c = fy_utf8_get(iter->cache_buf + iter->cache_pos, avail, &w);
 	if (c < 0)
 		return c;
 
 	iter->cache_pos += (unsigned int)w;
 	return c;
+}
+
+int fy_atom_iter_utf8_get(struct fy_atom_iter *iter)
+{
+	return fy_atom_iter_utf8_get_internal(iter, NULL);
+}
+
+int fy_atom_iter_utf8_get_bytes(struct fy_atom_iter *iter, int *errp)
+{
+	return fy_atom_iter_utf8_get_internal(iter, errp);
 }
 
 int fy_atom_iter_utf8_quoted_get(struct fy_atom_iter *iter, size_t *lenp, uint8_t *buf)
@@ -2246,8 +2263,11 @@ fy_atom_text_analyze_internal(struct fy_utf8_buf *ubuf,
 		/* clear SIZE0 once we've seen any character */
 		flags &= ~FYTTAF_SIZE0;
 
-		/* zero can't be output, only in double quoted mode */
-		if (c == 0) {
+		/*
+		 * zero can't be output, only in double quoted mode; same for a
+		 * byte that isn't valid UTF-8, which is only written escaped
+		 */
+		if (c == 0 || fy_utf8_is_byte_mark(c)) {
 
 			flags &= ~(FYTTAF_DIRECT_OUTPUT |
 				   FYTTAF_CAN_BE_PLAIN |
@@ -2261,7 +2281,10 @@ fy_atom_text_analyze_internal(struct fy_utf8_buf *ubuf,
 				   FYTTAF_VALID_ANCHOR);
 			flags |= FYTTAF_CAN_BE_DOUBLE_QUOTED;
 			flags &= ~FYTTAF_EMPTY;
-			flags |= FYTTAF_HAS_ZERO;
+			if (c == 0)
+				flags |= FYTTAF_HAS_ZERO;
+			else
+				flags |= FYTTAF_JSON_ESCAPE;
 			break_run = 0;
 
 		} else if (fy_is_ws(c)) {
@@ -2481,17 +2504,24 @@ out:
 	analysis->flags = flags;
 }
 
+struct fy_atom_text_analyze_iter {
+	struct fy_atom_iter iter;
+	unsigned int utf8_errs;
+};
+
 static int fy_atom_text_analyze_iter_read_block(void *user, int *buf, int count)
 {
-	struct fy_atom_iter *iter = user;
-	int c, rdn;
+	struct fy_atom_text_analyze_iter *aiter = user;
+	int c, rdn, err;
 
 	assert(count > 0);
 	assert(buf);
 
 	rdn = 0;
-	while (rdn < count && (c = fy_atom_iter_utf8_get(iter)) >= 0)
+	while (rdn < count && (c = fy_atom_iter_utf8_get_bytes(&aiter->iter, &err)) >= 0) {
+		fy_utf8_err_add(&aiter->utf8_errs, err);
 		buf[rdn++] = c;
+	}
 	return rdn > 0 ? rdn : FYUG_EOF;
 }
 
@@ -2499,7 +2529,7 @@ void
 fy_atom_text_analyze(struct fy_atom *handle, enum fy_atom_style style,
 		     struct fy_text_analysis *analysis)
 {
-	struct fy_atom_iter iter;
+	struct fy_atom_text_analyze_iter aiter;
 	struct fy_utf8_buf ubuf;
 	int buf[32];
 
@@ -2541,14 +2571,16 @@ fy_atom_text_analyze(struct fy_atom *handle, enum fy_atom_style style,
 		return;
 	}
 
-	fy_atom_iter_start(handle, &iter);
+	fy_atom_iter_start(handle, &aiter.iter);
+	aiter.utf8_errs = 0;
 
 	fy_utf8_buf_reset(&ubuf,
 			fy_atom_text_analyze_iter_read_block,
-			&iter,
+			&aiter,
 			buf, (int)ARRAY_SIZE(buf));
 
 	fy_atom_text_analyze_internal(&ubuf, style, fy_atom_lb_mode(handle), analysis);
+	fy_text_analysis_add_utf8_errs(analysis, aiter.utf8_errs);
 
-	fy_atom_iter_finish(&iter);
+	fy_atom_iter_finish(&aiter.iter);
 }

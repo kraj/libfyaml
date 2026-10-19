@@ -118,6 +118,16 @@ struct fy_text_analysis {
 	enum fy_scalar_style preferred_style;
 };
 
+/* turn the bad-byte kinds collected by fy_utf8_err_add() into flags */
+static inline void
+fy_text_analysis_add_utf8_errs(struct fy_text_analysis *analysis, unsigned int errs)
+{
+	if (errs & FY_UTF8_ERR_INV)
+		analysis->flags |= FYTTAF_HAS_INVALID_UTF8;
+	if (errs & FY_UTF8_ERR_PARTIAL)
+		analysis->flags |= FYTTAF_HAS_PARTIAL_UTF8;
+}
+
 struct fy_atom {
 	struct fy_mark start_mark;
 	struct fy_mark end_mark;
@@ -328,6 +338,8 @@ int fy_atom_iter_getc(struct fy_atom_iter *iter);
 int fy_atom_iter_ungetc(struct fy_atom_iter *iter, int c);
 int fy_atom_iter_peekc(struct fy_atom_iter *iter);
 int fy_atom_iter_utf8_get(struct fy_atom_iter *iter);
+/* a bad byte comes back as its byte mark, *errp says what was wrong */
+int fy_atom_iter_utf8_get_bytes(struct fy_atom_iter *iter, int *errp);
 int fy_atom_iter_utf8_quoted_get(struct fy_atom_iter *iter, size_t *lenp, uint8_t *buf);
 int fy_atom_iter_utf8_unget(struct fy_atom_iter *iter, int c);
 int fy_atom_iter_utf8_peek(struct fy_atom_iter *iter);
