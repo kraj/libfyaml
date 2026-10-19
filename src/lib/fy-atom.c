@@ -2179,6 +2179,7 @@ fy_atom_text_analyze_internal(struct fy_utf8_buf *ubuf,
 	uint8_t col0si, col0ei;	/* mask for --- ... at indent 0 */
 	int span, maxspan, maxcol, lbs, break_run, first_nws_col, second_nws_col;
 	bool ws_run_has_tab, wait_nws;
+	size_t bytes, bad_bytes;
 
 	flags = FYTTAF_TEXT_TOKEN |
 		FYTTAF_SIZE0 |
@@ -2208,6 +2209,7 @@ fy_atom_text_analyze_internal(struct fy_utf8_buf *ubuf,
 	col0si = col0ei = 0;
 	first_nws_col = second_nws_col = -1;
 	wait_nws = true;
+	bytes = bad_bytes = 0;
 
 	/* previous, current and next characters */
 	cp = FYUG_UNKNOWN;
@@ -2262,6 +2264,13 @@ fy_atom_text_analyze_internal(struct fy_utf8_buf *ubuf,
 
 		/* clear SIZE0 once we've seen any character */
 		flags &= ~FYTTAF_SIZE0;
+
+		/* a byte mark stands for one byte */
+		if (fy_utf8_is_byte_mark(c)) {
+			bytes++;
+			bad_bytes++;
+		} else
+			bytes += (size_t)fy_utf8_width(c);
 
 		/*
 		 * zero can't be output, only in double quoted mode; same for a
@@ -2485,6 +2494,9 @@ fy_atom_text_analyze_internal(struct fy_utf8_buf *ubuf,
 		flags |= FYTTAF_NEEDS_EXPLICIT_CHOMP;
 
 out:
+	if (bad_bytes * FYTTAF_BINARY_RATIO > bytes)
+		flags |= FYTTAF_LIKELY_BINARY;
+
 	analysis->maxspan = maxspan;
 	analysis->maxcol = maxcol;
 	analysis->lbs = lbs;
